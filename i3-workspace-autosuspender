@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+import i3ipc
+import os
+import signal
+import subprocess
+import notify2
+from Xlib import X, display
+
+notify2.init("i3-watcher")
+workspaces_to_monitor = [9, 10]
+
+
+def get_window_pid(window_id):
+    try:
+        disp = display.Display()
+        root = disp.screen().root
+
+        window = disp.create_resource_object("window", window_id)
+        pid_atom = disp.intern_atom("_NET_WM_PID")
+
+        pid_prop = window.get_property(pid_atom, X.AnyPropertyType, 0, 1, False)
+        if pid_prop and pid_prop.value:
+            return int(pid_prop.value[0])
+        else:
+            print(f"No _NET_WM_PID found for window {window_id}")
+            return None
+
+    except Exception as e:
+        print(f"Failed to get PID for window {window_id}: {e}")
+        return None
+
+
+def on_workspace_focus(i3, event):
+    current_workspace = event.current.num if event.current else None
+    old_workspace = event.old.num if event.old else None
+    print(f"Workspace focus changed from {old_workspace} to {current_workspace}")
+
+    if old_workspace in workspaces_to_monitor:
+        print(
+            f"Switched away from workspace {old_workspace} to {current_workspace}, suspending apps..."
+        )
+        suspend_applications(i3, old_workspace)
+
+    if current_workspace in workspaces_to_monitor:
+        print(f"Switched to workspace {current_workspace}, resuming apps...")
+        resume_applications(i3, current_workspace)
+
+
+def suspend_applications(i3, workspace):
+    for window in i3.get_tree().leaves():
+        if window.workspace().num == workspace:
+            pid = get_window_pid(window.window)
+            print(f"Suspending {window.name} {pid} on workspace {workspace}")
+            if pid is None:
+                print(f"Failed to find the pid for {window.name}")
+                continue
+            notification = notify2.Notification(
+                f"Suspended {window.name}", f"Suspended {window.name}, pid {pid}"
+            )
+            notification.set_timeout(1000)
+            notification.show()
+            os.kill(pid, signal.SIGSTOP)
+
+
+def resume_applications(i3, workspace):
+    for window in i3.get_tree().leaves():
+        if window.workspace().num == workspace:
+            pid = get_window_pid(window.window)
+            print(f"Resuming {window.name} pid {pid} on workspace {workspace}")
+            if pid is None:
+                print(f"Failed to find the pid for {window.name}")
+                continue
+            notification = notify2.Notification(
+                f"Resumed {window.name}", f"Resumed {window.name}, pid {pid}"
+            )
+            notification.set_timeout(1000)
+            notification.show()
+            os.kill(pid, signal.SIGCONT)
+
+
+if __name__ == "__main__":
+    i3 = i3ipc.Connection()
+    i3.on("workspace::focus", on_workspace_focus)
+    i3.main()
